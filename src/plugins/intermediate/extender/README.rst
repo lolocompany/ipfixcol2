@@ -14,8 +14,17 @@ Example configuration
       <name>Extenders</name>
       <plugin>extender</plugin>
       <params>
-        <expr>dot1qCustomerVlanId == 0</expr>
-        <id>VRFname=default</id>
+        <ids>          
+          <id>iana:VRFname</id>
+          <values>
+            <expr>iana:dot1qCustomerVlanId == 0</expr>
+            <value>vrf-0</value>
+          </values>
+          <values>
+            <expr>iana:dot1qCustomerVlanId == 1</expr>
+            <value>vrf-1</value>
+          </values>
+        </ids>
       </params>
     </intermediate>
 

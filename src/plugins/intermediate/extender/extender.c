@@ -48,10 +48,6 @@ struct plugin_ctx {
     uint16_t next_template_id;
 };
 
-typedef struct tmp_match {
-    config_ids_t* e;
-    bool matched;
-} tmp_match_t;
 
 struct plugin_ctx *
 create_plugin_ctx()
@@ -104,57 +100,8 @@ record_belongs_to_set(struct fds_ipfix_set_hdr *set, struct fds_drec *record)
     return record_begin >= set_begin && record_begin < set_end;
 }
 
-int
-ipx_plugin_init(ipx_ctx_t *ipx_ctx, const char *params)
-{
-    // Create the plugin context
-    struct plugin_ctx *pctx = create_plugin_ctx();
-    if (!pctx) {
-        return IPX_ERR_DENIED;
-    }
 
-    pctx->ipx_ctx = ipx_ctx;
-
-    // Parse config
-    pctx->config = config_parse(ipx_ctx, params);
-    if (!pctx->config) {
-        destroy_plugin_ctx(pctx);
-        return IPX_ERR_DENIED;
-    }
-
-    // Create the opts
-    for  (int i = 0; i < pctx->config->ids_count; i++) {
-        int rc = fds_ipfix_filter_create(&pctx->config->ids[i].filter, ipx_ctx_iemgr_get(ipx_ctx), pctx->config->ids[i].expr);
-
-        if (rc != FDS_OK) {
-            const char *error = fds_ipfix_filter_get_error(pctx->config->ids[i].filter);
-            IPX_CTX_ERROR(ipx_ctx, "Error creating filter: %s", error);
-            destroy_plugin_ctx(pctx);
-            return IPX_ERR_DENIED;
-        }
-
-        // from the id lookup the iana template id and data length
-        const struct fds_iemgr_elem * elem = fds_iemgr_elem_find_name(ipx_ctx_iemgr_get(ipx_ctx), pctx->config->ids[i].name);
-        if (!elem) {
-            IPX_CTX_ERROR(ipx_ctx, "Unknown ID (make sure case is correct): %s", pctx->config->ids[i].name);
-            destroy_plugin_ctx(pctx);
-            return IPX_ERR_DENIED;
-        }
-        pctx->config->ids[i].id = elem->id;
-        pctx->config->ids[i].data_type = elem->data_type;
-    }
-
-    ipx_ctx_private_set(ipx_ctx, pctx);
-    return IPX_OK;
-}
-
-void
-ipx_plugin_destroy(ipx_ctx_t *ipx_ctx, void *data)
-{
-    (void) ipx_ctx;
-    destroy_plugin_ctx(data);
-}
-uint16_t size_of_data_type(enum fds_iemgr_element_type data_type)
+static uint16_t size_of_data_type(enum fds_iemgr_element_type data_type)
 {
     switch(data_type) {
         case FDS_ET_BOOLEAN:
@@ -183,6 +130,93 @@ uint16_t size_of_data_type(enum fds_iemgr_element_type data_type)
             return 0; // Unknown size
     }
 }
+
+static size_t get_max_len(const config_ids_t* id)
+{
+    size_t max_len = 0;
+    for( int i =0; i < id->values_count; i++) {
+        if (id->values[i].value) {
+            size_t len = strlen(id->values[i].value);
+            if( len > max_len ) {
+                max_len = len;
+            }
+        }
+    }
+    return max_len;
+}
+
+int ipx_plugin_init(ipx_ctx_t *ipx_ctx, const char *params)
+{
+    // Create the plugin context
+    struct plugin_ctx *pctx = create_plugin_ctx();
+    if (!pctx) {
+        return IPX_ERR_DENIED;
+    }
+
+    pctx->ipx_ctx = ipx_ctx;
+
+    // Parse config
+    pctx->config = config_parse(ipx_ctx, params);
+    if (!pctx->config) {
+        destroy_plugin_ctx(pctx);
+        return IPX_ERR_DENIED;
+    }
+
+    // Create the opts
+    for  (int i = 0; i < pctx->config->ids_count; i++) {
+        for ( int v =0; v < pctx->config->ids[i].values_count; v++) {
+            config_ids_t* id = &pctx->config->ids[i];
+            config_value_t* value = &id->values[v];
+            printf("Config ID %s Value %s Expr %s\n", 
+                   id->name,
+                   value->value,
+                   value->expr);
+            int rc = fds_ipfix_filter_create(&value->filter, ipx_ctx_iemgr_get(ipx_ctx), value->expr);
+            if (rc != FDS_OK) {
+                const char *error = fds_ipfix_filter_get_error(value->filter);
+                IPX_CTX_ERROR(ipx_ctx, "Error creating filter: %s", error);
+                destroy_plugin_ctx(pctx);
+                return IPX_ERR_DENIED;
+            }
+
+            // from the id lookup the iana template id and data length
+            const struct fds_iemgr_elem * elem = fds_iemgr_elem_find_name(ipx_ctx_iemgr_get(ipx_ctx), id->name);
+            if (!elem) {
+                IPX_CTX_ERROR(ipx_ctx, "Unknown ID (make sure case is correct): %s", id->name);
+                destroy_plugin_ctx(pctx);
+                return IPX_ERR_DENIED;
+            }
+            id->id = elem->id;
+            id->data_type = elem->data_type;
+        }
+    }
+    size_t tmp_len = 0;
+    for (int i = 0; i < pctx->config->ids_count; i++) {        
+        const uint16_t size = size_of_data_type(pctx->config->ids[i].data_type);
+        if( size == UINT16_MAX ) {
+            size_t id_len = get_max_len(&pctx->config->ids[i]);
+            if (id_len < 255) 
+                id_len += 1;
+            else 
+                id_len += 3; // 255 + 2 bytes len        
+            tmp_len += id_len;
+        } else {
+            tmp_len += size;
+        }
+    }
+    printf("Maximum extension length per record: %zu bytes\n", tmp_len);
+    pctx->config->max_extension_len = tmp_len;
+    ipx_ctx_private_set(ipx_ctx, pctx);
+    return IPX_OK;
+}
+
+void
+ipx_plugin_destroy(ipx_ctx_t *ipx_ctx, void *data)
+{
+    (void) ipx_ctx;
+    destroy_plugin_ctx(data);
+}
+
     // Helper to find or create an extended template
 struct fds_template *
 get_or_create_extended_template(struct plugin_ctx *pctx, 
@@ -301,15 +335,14 @@ get_or_create_extended_template(struct plugin_ctx *pctx,
 }
 
 // If there is no match we still need to add a default value, e.g., zero for integers, empty string for strings.
-static void add_value(tmp_match_t* value, msg_builder_s* builder, struct ipx_ipfix_record* ref) 
+static void add_value(tmp_match_t* match, msg_builder_s* builder, struct ipx_ipfix_record* ref) 
 {
-    const config_ids_t* e = value->e;
-    switch (e->data_type)
+    switch (match->data_type)
     {
                     case FDS_ET_STRING:
                     case FDS_ET_OCTET_ARRAY:
                     {
-                        const char *val = value->matched ? e->value : "";
+                        const char *val = match->matched ? match->value : "";
                         size_t len = strlen(val);
                 
                         if (len < 255) {
@@ -329,14 +362,14 @@ static void add_value(tmp_match_t* value, msg_builder_s* builder, struct ipx_ipf
                     }
                     case FDS_ET_UNSIGNED_8:
                     {
-                        uint8_t v = value->matched ? (uint8_t)strtoul(e->value, NULL, 10) : 0;
+                        uint8_t v = match->matched ? (uint8_t)strtoul(match->value, NULL, 10) : 0;
                         msg_builder_write(builder, &v, 1);
                         ref->rec.size += 1;
                         break;
                     }
                     case FDS_ET_UNSIGNED_16:
                     {
-                        uint16_t v = value->matched ? (uint16_t)strtoul(e->value, NULL, 10) : 0;
+                        uint16_t v = match->matched ? (uint16_t)strtoul(match->value, NULL, 10) : 0;
                         v = htons(v);
                         msg_builder_write(builder, &v, 2);
                         ref->rec.size += 2;
@@ -344,7 +377,7 @@ static void add_value(tmp_match_t* value, msg_builder_s* builder, struct ipx_ipf
                     }
                     case FDS_ET_UNSIGNED_32:
                     {
-                        uint32_t v = value->matched ? (uint32_t)strtoul(e->value, NULL, 10) : 0;
+                        uint32_t v = match->matched ? (uint32_t)strtoul(match->value, NULL, 10) : 0;
                         v = htonl(v);
                         msg_builder_write(builder, &v, 4);
                         ref->rec.size += 4;
@@ -352,17 +385,18 @@ static void add_value(tmp_match_t* value, msg_builder_s* builder, struct ipx_ipf
                     }
                     case FDS_ET_UNSIGNED_64:
                     {
-                        uint64_t v = value->matched ? (uint64_t)strtoull(e->value, NULL, 10) : 0;
+                        uint64_t v = match->matched ? (uint64_t)strtoull(match->value, NULL, 10) : 0;
                         v = htobe64(v);
                         msg_builder_write(builder, &v, 8);
                         ref->rec.size += 8;
                         break;
                     }
                     default:
-                        printf("Unsupported data type for extension: %d\n", e->data_type);
+                        printf("Unsupported data type for extension: %d\n", match->data_type);
                         break;
                     }   
 }
+
 
 
 int
@@ -372,19 +406,7 @@ ipx_plugin_process(ipx_ctx_t *ipx_ctx, void *data, ipx_msg_t *base_msg)
     ipx_msg_ipfix_t *msg = (ipx_msg_ipfix_t *) base_msg;
     
     // Calculate maximum extension details for buffer allocation
-    size_t max_ext_len = 0;
-    for (int i = 0; i < pctx->config->ids_count; i++) {
-        // +1 for length byte (Variable length < 255)
-        // Note: We use 1 byte length prefix for short strings
-        size_t id_len = strlen(pctx->config->ids[i].value);
-        size_t total_len = id_len;
-        if (id_len < 255) total_len += 1;
-        else total_len += 3; // 255 + 2 bytes len
-        
-        if (total_len > max_ext_len) {
-            max_ext_len = total_len;
-        }
-    }
+    size_t max_ext_len = pctx->config->max_extension_len;
     
     // Calculate maximum buffer size
     struct fds_ipfix_msg_hdr *orig_hdr = (struct fds_ipfix_msg_hdr *) ipx_msg_ipfix_get_packet(msg);
@@ -475,11 +497,16 @@ ipx_plugin_process(ipx_ctx_t *ipx_ctx, void *data, ipx_msg_t *base_msg)
             
 
             for (int j = 0; j < pctx->config->ids_count; j++) {
-                match[extension_count].e = &pctx->config->ids[j];
-                if (fds_ipfix_filter_eval_biflow(pctx->config->ids[j].filter, drec) != FDS_IPFIX_FILTER_NO_MATCH) {
-                    match[extension_count].matched = true;
-                } else {
-                    match[extension_count].matched = false;
+                match[extension_count].id = pctx->config->ids[j].id;
+                match[extension_count].data_type = pctx->config->ids[j].data_type;
+                match[extension_count].matched = false;
+                for( int v =0; v < pctx->config->ids[j].values_count; v++) {
+                    config_value_t* value = &pctx->config->ids[j].values[v];
+                    if (fds_ipfix_filter_eval_biflow(value->filter, drec) != FDS_IPFIX_FILTER_NO_MATCH) {
+                        match[extension_count].matched = true;
+                        match[extension_count].value = value->value;
+                        break;
+                    }
                 }
                 extension_count++;
             }
