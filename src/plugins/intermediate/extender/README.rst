@@ -28,8 +28,7 @@ Example configuration
       </params>
     </intermediate>
 
-The above sample adds a new string field ``VRFname=default`` to each IPFIX record if the existing field ``dot1qCustomerVlanId`` equals zero.
-
+The above sample adds a new string field ``VRFname=vrf-0`` or ``VRFname=vrf-1`` to each IPFIX record depending on the value of ``dot1qCustomerVlanId``.
 
 Parameters
 ----------
