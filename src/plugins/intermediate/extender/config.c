@@ -51,25 +51,97 @@
  */
 
 enum params_xml_nodes {
-    FILTER_EXPR = 1,
+    EXTENSION_EXPR = 1,
     EXTENSION_ID = 2,
-    EXTENSION_VALUE = 3,
-    IDS = 4
+    EXTENSION_VALUES = 3,
+    EXTENSION_VALUE = 4,
+    EXTENSION_IDS = 5
+};
+
+static const struct fds_xml_args values_params[] = {
+    FDS_OPTS_ELEM(EXTENSION_EXPR, "expr", FDS_OPTS_T_STRING, 0),
+    FDS_OPTS_ELEM(EXTENSION_VALUE, "value", FDS_OPTS_T_STRING, 0),
+    FDS_OPTS_END
 };
 
 static const struct fds_xml_args ids_params[] = {
-    FDS_OPTS_ELEM(FILTER_EXPR, "expr", FDS_OPTS_T_STRING, 0),
-    FDS_OPTS_ELEM(EXTENSION_ID, "id", FDS_OPTS_T_STRING, 0),
-    FDS_OPTS_ELEM(EXTENSION_VALUE, "value", FDS_OPTS_T_STRING, 0),
+    FDS_OPTS_ELEM(EXTENSION_ID, "id", FDS_OPTS_T_STRING, 0),    
+    FDS_OPTS_NESTED(EXTENSION_VALUES, "values", values_params, FDS_OPTS_P_OPT | FDS_OPTS_P_MULTI),
     FDS_OPTS_END
 };
 
 static const struct fds_xml_args args_params[] = {
     FDS_OPTS_ROOT("params"),
-    FDS_OPTS_NESTED(IDS, "ids", ids_params, FDS_OPTS_P_OPT | FDS_OPTS_P_MULTI),
+    FDS_OPTS_NESTED(EXTENSION_IDS, "ids", ids_params, FDS_OPTS_P_OPT | FDS_OPTS_P_MULTI),
     FDS_OPTS_END
 };
 
+int config_parse_values(ipx_ctx_t *ctx, const struct fds_xml_cont *content, config_ids_t* id) {
+    const struct fds_xml_cont *value_content;
+    while (fds_xml_next(content->ptr_ctx, &value_content) == FDS_OK) {
+        switch (value_content->id) {
+            case EXTENSION_VALUE:
+                assert(value_content->type == FDS_OPTS_T_STRING);
+                if (strlen(value_content->ptr_string) == 0) {
+                    IPX_CTX_ERROR(ctx, "Extension value is empty!");
+                    return -1;
+                }
+                id->values[id->values_count].value = strdup(value_content->ptr_string);
+                if (!id->values[id->values_count].value) {
+                    IPX_CTX_ERROR(ctx, "Memory allocation error (%s:%d)", __FILE__, __LINE__);
+                    return -1;
+                }
+                break;
+            case EXTENSION_EXPR:
+                assert(value_content->type == FDS_OPTS_T_STRING);
+                if (strlen(value_content->ptr_string) == 0) {
+                    IPX_CTX_ERROR(ctx, "Filter expression is empty!");
+                    return -1;
+                }
+                id->values[id->values_count].expr = strdup(value_content->ptr_string);
+                if (!id->values[id->values_count].expr) {
+                    IPX_CTX_ERROR(ctx, "Memory allocation error (%s:%d)", __FILE__, __LINE__);
+                    return -1;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return 0;
+}
+
+int config_parse_ids(ipx_ctx_t *ctx, const struct fds_xml_cont *content, config_ids_t* id) {
+    const struct fds_xml_cont *id_content;
+    while (fds_xml_next(content->ptr_ctx, &id_content) == FDS_OK) {
+        switch (id_content->id) {
+            case EXTENSION_ID:
+                // Ignored in this plugin
+                assert(id_content->type == FDS_OPTS_T_STRING);
+                if (strlen(id_content->ptr_string) == 0) {
+                    IPX_CTX_ERROR(ctx, "Extension ID is empty!");
+                    return -1;
+                }
+                id->name = strdup(id_content->ptr_string);
+                if (!id->name) {
+                    IPX_CTX_ERROR(ctx, "Memory allocation error (%s:%d)", __FILE__, __LINE__);
+                    return -1;
+                }
+                break;
+            case EXTENSION_VALUES:
+                if( id->values_count >= CONFIG_VALUSE_MAX ) {
+                    IPX_CTX_ERROR(ctx, "Maximum number of extension values per id exceeded (%d)!", CONFIG_VALUSE_MAX);
+                    return -1;
+                }
+                config_parse_values(ctx, id_content, id);
+                id->values_count++;
+                break;
+            default:
+                break;
+        }
+    }
+    return 0;
+}
 
 struct config *
 config_parse(ipx_ctx_t *ctx, const char *params)
@@ -103,63 +175,24 @@ config_parse(ipx_ctx_t *ctx, const char *params)
     const struct fds_xml_cont *content;
     while (fds_xml_next(params_ctx, &content) == FDS_OK) {
         switch (content->id) {
-            case IDS:
+            case EXTENSION_IDS:
             {
                 if( cfg->ids_count >= CONFIG_IDS_MAX ) {
-                    IPX_CTX_ERROR(ctx, "Maximum number of extension IDs exceeded (%d)!", CONFIG_IDS_MAX);
+                    IPX_CTX_ERROR(ctx, "Maximum number of extension uniq ids exceeded (%d)!", CONFIG_IDS_MAX);
                     goto error;
                 }
                 config_ids_t* id = &cfg->ids[cfg->ids_count];
-                id->expr = NULL;
-                id->name = NULL;
-                cfg->ids_count++;
-                const struct fds_xml_cont *id_content;
-                while (fds_xml_next(content->ptr_ctx, &id_content) == FDS_OK) {
-                    switch (id_content->id) {
-                        case FILTER_EXPR:
-                            assert(id_content->type == FDS_OPTS_T_STRING);
-                            if (strlen(id_content->ptr_string) == 0) {
-                                IPX_CTX_ERROR(ctx, "Filter expression is empty!");
-                                goto error;
-                            }
-                            id->expr = strdup(id_content->ptr_string);
-                            if (!id->expr) {
-                                IPX_CTX_ERROR(ctx, "Memory allocation error (%s:%d)", __FILE__, __LINE__);
-                                goto error;
-                            }
-                            break;        
-                        case EXTENSION_ID:
-                            // Ignored in this plugin
-                            assert(id_content->type == FDS_OPTS_T_STRING);
-                            if (strlen(id_content->ptr_string) == 0) {
-                                IPX_CTX_ERROR(ctx, "Extension ID is empty!");
-                                goto error;
-                            }
-                            id->name = strdup(id_content->ptr_string);
-                            if (!id->name) {
-                                IPX_CTX_ERROR(ctx, "Memory allocation error (%s:%d)", __FILE__, __LINE__);
-                                goto error;
-                            }
-                            break;
-                        case EXTENSION_VALUE:
-                            assert(id_content->type == FDS_OPTS_T_STRING);
-                            if (strlen(id_content->ptr_string) == 0) {
-                                IPX_CTX_ERROR(ctx, "Extension value is empty!");
-                                goto error;
-                            }
-                            id->value = strdup(id_content->ptr_string);
-                            if (!id->value) {
-                                IPX_CTX_ERROR(ctx, "Memory allocation error (%s:%d)", __FILE__, __LINE__);
-                                goto error;
-                            }
-                            break;              
-                    }
+                id->name = NULL;                
+                if( config_parse_ids(ctx, content, id) != 0 ) {
+                    goto error;
                 }
+                cfg->ids_count++;
                 break;
             }
+            default:
+                break;
         }
     }
-
     fds_xml_destroy(parser);
     return cfg;
 
@@ -177,17 +210,19 @@ config_destroy(struct config *cfg)
     }
     for( int i = 0; i < cfg->ids_count; i++) {
         printf("Free filter %s\n", cfg->ids[i].name);
-        if( cfg->ids[i].expr ) {
-            free(cfg->ids[i].expr);
-            cfg->ids[i].expr = NULL;
-        }
-        if( cfg->ids[i].filter ) {
-            fds_ipfix_filter_destroy(cfg->ids[i].filter);
-            cfg->ids[i].filter = NULL;
-        }
-        if( cfg->ids[i].value ) {
-            free(cfg->ids[i].value);
-            cfg->ids[i].value = NULL;
+        for( int v =0; v < cfg->ids[i].values_count; v++) {
+            if( cfg->ids[i].values[v].expr ) {
+                free(cfg->ids[i].values[v].expr);
+                cfg->ids[i].values[v].expr = NULL;
+            }
+            if( cfg->ids[i].values[v].value ) {
+                free(cfg->ids[i].values[v].value);
+                cfg->ids[i].values[v].value = NULL;
+            }
+            if( cfg->ids[i].values[v].filter ) {
+                fds_ipfix_filter_destroy(cfg->ids[i].values[v].filter);
+                cfg->ids[i].values[v].filter = NULL;
+            }
         }
         if( cfg->ids[i].name ) {
             free(cfg->ids[i].name);

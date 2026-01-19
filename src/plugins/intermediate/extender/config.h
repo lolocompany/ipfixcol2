@@ -42,23 +42,38 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define CONFIG_IDS_MAX 12
+#define CONFIG_IDS_MAX 4
+#define CONFIG_VALUSE_MAX 12
 
 #include <ipfixcol2.h>
 
-typedef struct config_ids {
+typedef struct config_value {
     char *expr;
-    char* name;
     char* value;
+    fds_ipfix_filter_t *filter;
+} config_value_t;
+
+typedef struct config_ids {
+    char* name;
     uint16_t id;
     enum fds_iemgr_element_type     data_type;
-    fds_ipfix_filter_t *filter;
+    int values_count;
+    config_value_t values[CONFIG_IDS_MAX];
 } config_ids_t;
 
 struct config {
+    size_t max_extension_len;
     int ids_count;
     config_ids_t ids[CONFIG_IDS_MAX];
 };
+
+typedef struct tmp_match {
+    u_int16_t id;
+    enum fds_iemgr_element_type data_type;
+    char* value;
+    bool matched;
+} tmp_match_t;
+
 
 struct config *
 config_parse(ipx_ctx_t *ctx, const char *params);
