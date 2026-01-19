@@ -2,7 +2,7 @@
  Extender (intermediate plugin)
 ============================
 
-This intermediate plugin extends IPFIX records by adding new fields to the existing ones using user-defined expressions.
+This intermediate plugin extends IPFIX records by adding new items to the existing record set using user-defined expressions.
 
 
 Example configuration
